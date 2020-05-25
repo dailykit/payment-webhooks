@@ -1,0 +1,23 @@
+{
+   "name": "payment-webhooks",
+   "version": "0.1.0",
+   "main": "index.js",
+   "repository": "https://github.com/dailykit/payment-webhooks.git",
+   "author": "Praveen Bisht",
+   "license": "MIT",
+   "scripts": {
+      "dev": "nodemon -r esm index.js",
+      "prod": "node -r esm index.js"
+   },
+   "dependencies": {
+      "cors": "^2.8.5",
+      "dotenv": "^8.2.0",
+      "esm": "^3.2.25",
+      "express": "^4.17.1",
+      "morgan": "^1.10.0",
+      "stripe": "^8.55.0"
+   },
+   "devDependencies": {
+      "nodemon": "^2.0.4"
+   }
+}
