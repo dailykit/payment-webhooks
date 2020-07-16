@@ -1,4 +1,40 @@
+import { request } from 'graphql-request'
+
 import stripe from '../lib/stripe'
+import client from '../lib/client'
+
+const FETCH_DATAHUB_URL = `
+   query organizations($stripePaymentIntentId: String_comparison_exp!) {
+      organizations: customerPaymentIntents(where: {stripePaymentIntentId: $stripePaymentIntentId}) {
+         id
+         organization {
+            organizationUrl
+         }
+      }
+   }
+`
+
+const UPDATE_CART = `
+   mutation updateCart($id: Int_comparison_exp!, $paymentStatus: String!, $transactionRemark: jsonb!) {
+      updateCart(
+         where: {id: $id}, 
+         _set: {paymentStatus: $paymentStatus, transactionRemark: $transactionRemark}) {
+         returning {
+            id
+         }
+      }
+   } 
+`
+
+const STATUS = {
+   created: 'CREATED',
+   canceled: 'CANCELLED',
+   succeeded: 'SUCCEEDED',
+   processing: 'PROCESSING',
+   payment_failed: 'PAYMENT_FAILED',
+   requires_action: 'REQUIRES_ACTION',
+   requires_payment_method: 'REQUIRES_PAYMENT_METHOD',
+}
 
 export const paymentIntentEvents = async (req, res) => {
    try {
@@ -16,51 +52,22 @@ export const paymentIntentEvents = async (req, res) => {
             error: `Webhook Error: ${err.message}`,
          })
       }
-      switch (event.type) {
-         case 'payment_intent.created': {
-            const paymentIntent = event.data.object
-            console.log(
-               'paymentIntentEvents -> payment_intent.created',
-               paymentIntent
-            )
-            break
-         }
-         case 'payment_intent.succeeded': {
-            const paymentIntent = event.data.object
-            console.log(
-               'paymentIntentEvents -> payment_intent.succeeded',
-               paymentIntent
-            )
-            break
-         }
-         case 'payment_intent.processing': {
-            const paymentIntent = event.data.object
-            console.log(
-               'paymentIntentEvents -> payment_intent.processing',
-               paymentIntent
-            )
-            break
-         }
-         case 'payment_intent.payment_failed': {
-            const paymentIntent = event.data.object
-            console.log(
-               'paymentIntentEvents -> payment_intent.payment_failed',
-               paymentIntent
-            )
-            break
-         }
-         case 'payment_intent.canceled': {
-            const paymentIntent = event.data.object
-            console.log(
-               'paymentIntentEvents -> payment_intent.canceled',
-               paymentIntent
-            )
-            break
-         }
-         default: {
-            return res.status(400).end()
-         }
-      }
+
+      const intent = event.data.object
+      const { organizations } = await client.request(FETCH_DATAHUB_URL, {
+         stripePaymentIntentId: {
+            _eq: intent.id,
+         },
+      })
+
+      let url = `https://${organizations[0].organization.organizationUrl}/datahub/v1/graphql`
+
+      await request(url, UPDATE_CART, {
+         transactionRemark: intent,
+         id: { _eq: intent.transferGroup },
+         paymentStatus: STATUS[intent.status],
+      })
+
       return res.status(200).json({ received: true })
    } catch (error) {
       return res.status(404).json({ success: false, error: error.message })
