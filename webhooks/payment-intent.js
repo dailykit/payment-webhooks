@@ -1,4 +1,4 @@
-import { request } from 'graphql-request'
+import { request, GraphQLClient } from 'graphql-request'
 
 import stripe from '../lib/stripe'
 import client from '../lib/client'
@@ -7,8 +7,9 @@ const FETCH_DATAHUB_URL = `
    query organizations($stripePaymentIntentId: String_comparison_exp!) {
       organizations: customerPaymentIntents(where: {stripePaymentIntentId: $stripePaymentIntentId}) {
          id
-         organization {
-            organizationUrl
+         org: organization {
+            secret: adminSecret
+            url: organizationUrl
          }
       }
    }
@@ -60,15 +61,27 @@ export const paymentIntentEvents = async (req, res) => {
          },
       })
 
-      let url = `https://${organizations[0].organization.organizationUrl}/datahub/v1/graphql`
+      if (organizations.length > 0) {
+         const [organization] = organizations
 
-      await request(url, UPDATE_CART, {
-         transactionRemark: intent,
-         id: { _eq: intent.transferGroup },
-         paymentStatus: STATUS[intent.status],
-      })
+         let url = `https://${organization.org.url}/datahub/v1/graphql`
 
-      return res.status(200).json({ received: true })
+         const datahubClient = new GraphQLClient(url, {
+            headers: {
+               'x-hasura-admin-secret': organization.org.secret,
+            },
+         })
+
+         await datahubClient.request(UPDATE_CART, {
+            transactionRemark: intent,
+            id: { _eq: intent.transferGroup },
+            paymentStatus: STATUS[intent.status],
+         })
+
+         return res.status(200).json({ received: true })
+      } else {
+         throw Error("Linked organization doesn't exists!")
+      }
    } catch (error) {
       return res.status(404).json({ success: false, error: error.message })
    }
