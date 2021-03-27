@@ -14,7 +14,7 @@ app.use(
    )
 )
 
-app.post('/api/webhook/payment-intent', parse, paymentIntentEvents)
+app.post('/stripe', parse, paymentIntentEvents)
 
 app.listen(process.env.PORT, function () {
    console.log(`Listening on :${process.env.PORT}`)
