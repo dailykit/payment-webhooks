@@ -156,10 +156,6 @@ const handleInvoice = async ({
    organization,
    datahub,
 }) => {
-   console.log('handleInvoice', {
-      recordId,
-      cartId,
-   })
    try {
       let payment_intent = null
       if (invoice.payment_intent) {
@@ -169,19 +165,21 @@ const handleInvoice = async ({
          )
       }
 
+      const { lines: invoiceLines = {}, ...invoiceRest } = invoice
+      const { lines: intentLines = {}, ...intentRest } = payment_intent || {}
       await client.request(UPDATE_CUSTOMER_PAYMENT_INTENT, {
          id: recordId,
          _prepend: {
-            stripeInvoiceHistory: invoice,
+            stripeInvoiceHistory: invoiceRest,
             ...(payment_intent && {
-               transactionRemarkHistory: payment_intent,
+               transactionRemarkHistory: intentRest,
             }),
          },
          _set: {
             stripeInvoiceId: invoice.id,
-            stripeInvoiceDetails: invoice,
+            stripeInvoiceDetails: invoiceRest,
             ...(payment_intent && {
-               transactionRemark: payment_intent,
+               transactionRemark: intentRest,
                status: STATUS[payment_intent.status],
             }),
          },
@@ -190,17 +188,17 @@ const handleInvoice = async ({
       await datahub.request(UPDATE_CART, {
          pk_columns: { id: cartId },
          _prepend: {
-            stripeInvoiceHistory: invoice,
+            stripeInvoiceHistory: invoiceRest,
             ...(payment_intent && {
-               transactionRemarkHistory: payment_intent,
+               transactionRemarkHistory: intentRest,
             }),
          },
          _set: {
             stripeInvoiceId: invoice.id,
-            stripeInvoiceDetails: invoice,
+            stripeInvoiceDetails: invoiceRest,
             ...(payment_intent && {
                transactionId: payment_intent.id,
-               transactionRemark: payment_intent,
+               transactionRemark: intentRest,
                paymentStatus: STATUS[payment_intent.status],
             }),
          },
@@ -213,22 +211,22 @@ const handleInvoice = async ({
 
 const handlePaymentIntent = async ({ recordId, cartId, intent, datahub }) => {
    try {
-      console.log('handlePaymentIntent', { recordId, cartId })
+      const { lines: intentLines = {}, ...intentRest } = intent
       await client.request(UPDATE_CUSTOMER_PAYMENT_INTENT, {
          id: recordId,
-         _prepend: { transactionRemarkHistory: intent },
+         _prepend: { transactionRemarkHistory: intentRest },
          _set: {
-            transactionRemark: intent,
+            transactionRemark: intentRest,
             status: STATUS[intent.status],
          },
       })
 
       await datahub.request(UPDATE_CART, {
          pk_columns: { id: cartId },
-         _prepend: { transactionRemarkHistory: intent },
+         _prepend: { transactionRemarkHistory: intentRest },
          _set: {
             transactionId: intent.id,
-            transactionRemark: intent,
+            transactionRemark: intentRest,
             paymentStatus: STATUS[intent.status],
          },
       })
