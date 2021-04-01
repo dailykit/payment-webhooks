@@ -7,15 +7,9 @@ const UPDATE_CUSTOMER_PAYMENT_INTENT = `
    mutation updateCustomerPaymentIntent(
       $id: uuid!
       $_set: stripe_customerPaymentIntent_set_input = {}
-      $_prepend: stripe_customerPaymentIntent_prepend_input = {}
    ) {
-      updateCustomerPaymentIntent(
-         pk_columns: { id: $id }
-         _set: $_set
-         _prepend: $_prepend
-      ) {
+      updateCustomerPaymentIntent(pk_columns: { id: $id }, _set: $_set) {
          id
-         stripeInvoiceHistory
       }
    }
 `
@@ -40,10 +34,33 @@ const UPDATE_CART = `
    mutation updateCart(
       $pk_columns: order_cart_pk_columns_input!
       $_set: order_cart_set_input = {}
-      $_prepend: order_cart_prepend_input = {}
    ) {
-      updateCart(pk_columns: $pk_columns, _set: $_set, _prepend: $_prepend) {
+      updateCart(pk_columns: $pk_columns, _set: $_set) {
          id
+      }
+   }
+`
+
+const DAILYCLOAK_INSERT_STRIPE_PAYMENT_HISTORY = `
+   mutation insertStripePaymentHistory(
+      $objects: [stripe_stripePaymentHistory_insert_input!]!
+   ) {
+      insertStripePaymentHistory: insert_stripe_stripePaymentHistory(
+         objects: $objects
+      ) {
+         affected_rows
+      }
+   }
+`
+
+const DATAHUB_INSERT_STRIPE_PAYMENT_HISTORY = `
+   mutation insertStripePaymentHistory(
+      $objects: [order_stripePaymentHistory_insert_input!]!
+   ) {
+      insertStripePaymentHistory: insert_order_stripePaymentHistory(
+         objects: $objects
+      ) {
+         affected_rows
       }
    }
 `
@@ -165,43 +182,68 @@ const handleInvoice = async ({
          )
       }
 
-      const { lines: invoiceLines = {}, ...invoiceRest } = invoice
-      const { lines: intentLines = {}, ...intentRest } = payment_intent || {}
       await client.request(UPDATE_CUSTOMER_PAYMENT_INTENT, {
          id: recordId,
-         _prepend: {
-            stripeInvoiceHistory: invoiceRest,
-            ...(payment_intent && {
-               transactionRemarkHistory: intentRest,
-            }),
-         },
          _set: {
             stripeInvoiceId: invoice.id,
-            stripeInvoiceDetails: invoiceRest,
+            stripeInvoiceDetails: invoice,
             ...(payment_intent && {
-               transactionRemark: intentRest,
+               transactionRemark: payment_intent,
+               stripePaymentIntentId: payment_intent.id,
                status: STATUS[payment_intent.status],
             }),
          },
       })
 
+      await client.request(DAILYCLOAK_INSERT_STRIPE_PAYMENT_HISTORY, {
+         objects: [
+            {
+               type: 'INVOICE',
+               status: invoice.status,
+               stripeInvoiceId: invoice.id,
+               stripeInvoiceDetails: invoice,
+               customerPaymentIntentId: recordId,
+            },
+            ...(payment_intent && {
+               type: 'PAYMENT_INTENT',
+               status: payment_intent.status,
+               customerPaymentIntentId: recordId,
+               transactionRemark: payment_intent,
+               stripePaymentIntentId: payment_intent.id,
+            }),
+         ],
+      })
+
       await datahub.request(UPDATE_CART, {
          pk_columns: { id: cartId },
-         _prepend: {
-            stripeInvoiceHistory: invoiceRest,
-            ...(payment_intent && {
-               transactionRemarkHistory: intentRest,
-            }),
-         },
          _set: {
             stripeInvoiceId: invoice.id,
-            stripeInvoiceDetails: invoiceRest,
+            stripeInvoiceDetails: invoice,
             ...(payment_intent && {
+               transactionRemark: payment_intent,
                transactionId: payment_intent.id,
-               transactionRemark: intentRest,
                paymentStatus: STATUS[payment_intent.status],
             }),
          },
+      })
+
+      await datahub.request(DATAHUB_INSERT_STRIPE_PAYMENT_HISTORY, {
+         objects: [
+            {
+               cartId,
+               type: 'INVOICE',
+               status: invoice.status,
+               stripeInvoiceId: invoice.id,
+               stripeInvoiceDetails: invoice,
+            },
+            ...(payment_intent && {
+               cartId,
+               type: 'PAYMENT_INTENT',
+               status: payment_intent.status,
+               transactionId: payment_intent.id,
+               transactionRemark: payment_intent,
+            }),
+         ],
       })
       return
    } catch (error) {
@@ -211,24 +253,46 @@ const handleInvoice = async ({
 
 const handlePaymentIntent = async ({ recordId, cartId, intent, datahub }) => {
    try {
-      const { lines: intentLines = {}, ...intentRest } = intent
       await client.request(UPDATE_CUSTOMER_PAYMENT_INTENT, {
          id: recordId,
-         _prepend: { transactionRemarkHistory: intentRest },
          _set: {
-            transactionRemark: intentRest,
+            transactionRemark: intent,
             status: STATUS[intent.status],
+            stripePaymentIntentId: intent.id,
          },
+      })
+
+      await client.request(DAILYCLOAK_INSERT_STRIPE_PAYMENT_HISTORY, {
+         objects: [
+            {
+               type: 'PAYMENT_INTENT',
+               status: intent.status,
+               transactionRemark: intent,
+               stripePaymentIntentId: intent.id,
+               customerPaymentIntentId: recordId,
+            },
+         ],
       })
 
       await datahub.request(UPDATE_CART, {
          pk_columns: { id: cartId },
-         _prepend: { transactionRemarkHistory: intentRest },
          _set: {
             transactionId: intent.id,
-            transactionRemark: intentRest,
+            transactionRemark: intent,
             paymentStatus: STATUS[intent.status],
          },
+      })
+
+      await datahub.request(DATAHUB_INSERT_STRIPE_PAYMENT_HISTORY, {
+         objects: [
+            {
+               cartId,
+               status: intent.status,
+               type: 'PAYMENT_INTENT',
+               transactionId: intent.id,
+               transactionRemark: intent,
+            },
+         ],
       })
       return
    } catch (error) {
