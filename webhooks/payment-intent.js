@@ -195,23 +195,28 @@ const handleInvoice = async ({
          },
       })
 
+      let dailycloak_history_objects = [
+         {
+            type: 'INVOICE',
+            status: invoice.status,
+            stripeInvoiceId: invoice.id,
+            stripeInvoiceDetails: invoice,
+            customerPaymentIntentId: recordId,
+         },
+      ]
+
+      if (payment_intent) {
+         dailycloak_history_objects.push({
+            type: 'PAYMENT_INTENT',
+            status: payment_intent.status,
+            customerPaymentIntentId: recordId,
+            transactionRemark: payment_intent,
+            stripePaymentIntentId: payment_intent.id,
+         })
+      }
+
       await client.request(DAILYCLOAK_INSERT_STRIPE_PAYMENT_HISTORY, {
-         objects: [
-            {
-               type: 'INVOICE',
-               status: invoice.status,
-               stripeInvoiceId: invoice.id,
-               stripeInvoiceDetails: invoice,
-               customerPaymentIntentId: recordId,
-            },
-            ...(payment_intent && {
-               type: 'PAYMENT_INTENT',
-               status: payment_intent.status,
-               customerPaymentIntentId: recordId,
-               transactionRemark: payment_intent,
-               stripePaymentIntentId: payment_intent.id,
-            }),
-         ],
+         objects: dailycloak_history_objects,
       })
 
       await datahub.request(UPDATE_CART, {
@@ -227,23 +232,28 @@ const handleInvoice = async ({
          },
       })
 
+      let datahub_history_objects = [
+         {
+            cartId,
+            type: 'INVOICE',
+            status: invoice.status,
+            stripeInvoiceId: invoice.id,
+            stripeInvoiceDetails: invoice,
+         },
+      ]
+
+      if (payment_intent) {
+         datahub_history_objects.push({
+            cartId,
+            type: 'PAYMENT_INTENT',
+            status: payment_intent.status,
+            transactionId: payment_intent.id,
+            transactionRemark: payment_intent,
+         })
+      }
+
       await datahub.request(DATAHUB_INSERT_STRIPE_PAYMENT_HISTORY, {
-         objects: [
-            {
-               cartId,
-               type: 'INVOICE',
-               status: invoice.status,
-               stripeInvoiceId: invoice.id,
-               stripeInvoiceDetails: invoice,
-            },
-            ...(payment_intent && {
-               cartId,
-               type: 'PAYMENT_INTENT',
-               status: payment_intent.status,
-               transactionId: payment_intent.id,
-               transactionRemark: payment_intent,
-            }),
-         ],
+         objects: datahub_history_objects,
       })
       return
    } catch (error) {
