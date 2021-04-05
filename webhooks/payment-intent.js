@@ -7,8 +7,13 @@ const UPDATE_CUSTOMER_PAYMENT_INTENT = `
    mutation updateCustomerPaymentIntent(
       $id: uuid!
       $_set: stripe_customerPaymentIntent_set_input = {}
+      $_inc: stripe_customerPaymentIntent_inc_input = {}
    ) {
-      updateCustomerPaymentIntent(pk_columns: { id: $id }, _set: $_set) {
+      updateCustomerPaymentIntent(
+         pk_columns: { id: $id }
+         _set: $_set
+         _inc: $_inc
+      ) {
          id
       }
    }
@@ -146,6 +151,7 @@ export const paymentIntentEvents = async (req, res) => {
          await handleInvoice({
             datahub,
             organization,
+            eventType: event.type,
             invoice: event.data.object,
             recordId: customerPaymentIntent.id,
             cartId: customerPaymentIntent.transferGroup,
@@ -172,6 +178,7 @@ const handleInvoice = async ({
    invoice,
    organization,
    datahub,
+   eventType,
 }) => {
    try {
       let payment_intent = null
@@ -180,6 +187,28 @@ const handleInvoice = async ({
             invoice.payment_intent,
             { stripeAccount: organization.stripeAccountId }
          )
+         if (
+            invoice.payment_settings.payment_method_options === null &&
+            eventType === 'invoice.payment_failed'
+         ) {
+            const wasPreviousIntentDeclined =
+               payment_intent &&
+               payment_intent.last_payment_error &&
+               Object.keys(payment_intent.last_payment_error).length > 0 &&
+               payment_intent.last_payment_error.code === 'card_declined' &&
+               ['do_not_honor', 'transaction_not_allowed'].includes(
+                  payment_intent.last_payment_error.decline_code
+               )
+            if (wasPreviousIntentDeclined) {
+               console.log('INCREMENT PAYMENT ATTEMPT DUE CARD DO NOT HONOR')
+               await client.request(UPDATE_CUSTOMER_PAYMENT_INTENT, {
+                  id: recordId,
+                  _inc: { paymentRetryAttempt: 1 },
+                  _set: { requires3dSecure: true },
+               })
+               return
+            }
+         }
       }
 
       await client.request(UPDATE_CUSTOMER_PAYMENT_INTENT, {
