@@ -187,6 +187,23 @@ const handleInvoice = async ({
             invoice.payment_intent,
             { stripeAccount: organization.stripeAccountId }
          )
+         // SEND ACTION REQUIRED SMS
+         if (eventType === 'invoice.payment_action_required') {
+            console.log('SEND ACTION URL SMS')
+            await client.request(UPDATE_CUSTOMER_PAYMENT_INTENT, {
+               id: recordId,
+               _inc: { smsAttempt: 1 },
+               _set: {
+                  stripeInvoiceId: invoice.id,
+                  stripeInvoiceDetails: invoice,
+                  ...(payment_intent && {
+                     transactionRemark: payment_intent,
+                     stripePaymentIntentId: payment_intent.id,
+                     status: STATUS[payment_intent.status],
+                  }),
+               },
+            })
+         }
          if (
             invoice.payment_settings.payment_method_options === null &&
             eventType === 'invoice.payment_failed'
@@ -284,6 +301,7 @@ const handleInvoice = async ({
       await datahub.request(DATAHUB_INSERT_STRIPE_PAYMENT_HISTORY, {
          objects: datahub_history_objects,
       })
+
       return
    } catch (error) {
       throw error
