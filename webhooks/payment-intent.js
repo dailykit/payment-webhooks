@@ -1,3 +1,4 @@
+import get from 'lodash.get'
 import { GraphQLClient } from 'graphql-request'
 
 import stripe from '../lib/stripe'
@@ -27,6 +28,7 @@ const FETCH_DATAHUB_URL = `
          id
          transferGroup
          organization {
+            datahubUrl
             stripeAccountId
             secret: adminSecret
             url: organizationUrl
@@ -70,6 +72,15 @@ const DATAHUB_INSERT_STRIPE_PAYMENT_HISTORY = `
    }
 `
 
+const CART = `
+   query cart($id: Int!) {
+      cart(id: $id) {
+         id
+         paymentStatus
+      }
+   }
+`
+
 const STATUS = {
    created: 'CREATED',
    canceled: 'CANCELLED',
@@ -106,11 +117,7 @@ export const paymentIntentEvents = async (req, res) => {
       }
 
       const node = event.data.object
-      console.log('node -> object', {
-         event: event.type,
-         type: node.object,
-         id: node.id,
-      })
+
       if (!['invoice', 'payment_intent'].includes(node.object))
          return res.status(200).send({
             success: false,
@@ -139,13 +146,22 @@ export const paymentIntentEvents = async (req, res) => {
 
       const [customerPaymentIntent] = customerPaymentIntents
       const { organization = {} } = customerPaymentIntent
-      let url = `https://${organization.url}/datahub/v1/graphql`
 
-      const datahub = new GraphQLClient(url, {
-         headers: {
-            'x-hasura-admin-secret': organization.secret,
-         },
+      const datahub = new GraphQLClient(organization.datahubUrl, {
+         headers: { 'x-hasura-admin-secret': organization.secret },
       })
+
+      const { cart } = await datahub.request(CART, {
+         id: Number(customerPaymentIntent.transferGroup),
+      })
+
+      if (get(cart, 'id') && cart.paymentStatus === 'SUCCEEDED') {
+         return res.status(200).json({
+            success: true,
+            message:
+               "Could not process invoice/intent webhook, since cart's payment has already succeeded",
+         })
+      }
 
       if (node.object === 'invoice') {
          await handleInvoice({
@@ -172,15 +188,11 @@ export const paymentIntentEvents = async (req, res) => {
    }
 }
 
-const handleInvoice = async ({
-   recordId,
-   cartId,
-   invoice,
-   organization,
-   datahub,
-   eventType,
-}) => {
+const handleInvoice = async args => {
    try {
+      const { recordId, cartId, invoice, organization, datahub, eventType } =
+         args
+
       let payment_intent = null
       if (invoice.payment_intent) {
          payment_intent = await stripe.paymentIntents.retrieve(
@@ -308,8 +320,9 @@ const handleInvoice = async ({
    }
 }
 
-const handlePaymentIntent = async ({ recordId, cartId, intent, datahub }) => {
+const handlePaymentIntent = async args => {
    try {
+      const { recordId, cartId, intent, datahub } = args
       await client.request(UPDATE_CUSTOMER_PAYMENT_INTENT, {
          id: recordId,
          _set: {
