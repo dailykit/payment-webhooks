@@ -20,13 +20,14 @@ const UPDATE_CUSTOMER_PAYMENT_INTENT = `
    }
 `
 
-const FETCH_DATAHUB_URL = `
+const CUSTOMER_PAYMENT_INTENTS = `
    query customerPaymentIntents(
       $where: stripe_customerPaymentIntent_bool_exp!
    ) {
       customerPaymentIntents(where: $where) {
          id
          transferGroup
+         isAutoCancelled
          organization {
             datahubUrl
             stripeAccountId
@@ -125,7 +126,7 @@ export const paymentIntentEvents = async (req, res) => {
          })
 
       const { customerPaymentIntents = [] } = await client.request(
-         FETCH_DATAHUB_URL,
+         CUSTOMER_PAYMENT_INTENTS,
          {
             where: {
                ...(node.object === 'invoice' && {
@@ -145,7 +146,16 @@ export const paymentIntentEvents = async (req, res) => {
          })
 
       const [customerPaymentIntent] = customerPaymentIntents
-      const { organization = {} } = customerPaymentIntent
+      const { organization = {}, isAutoCancelled = false } =
+         customerPaymentIntent
+
+      if (isAutoCancelled) {
+         return res.status(200).json({
+            success: true,
+            message:
+               'Aborting early since payment record was previously auto cancelled due to attempting payment via different provider.',
+         })
+      }
 
       const datahub = new GraphQLClient(organization.datahubUrl, {
          headers: { 'x-hasura-admin-secret': organization.secret },
@@ -183,8 +193,7 @@ export const paymentIntentEvents = async (req, res) => {
          return res.status(200).json({ received: true })
       }
    } catch (error) {
-      console.log(error)
-      return res.status(500).json({ success: false, error: error.message })
+      return res.status(500).json({ success: false, error })
    }
 }
 
