@@ -28,6 +28,7 @@ const CUSTOMER_PAYMENT_INTENTS = `
          id
          transferGroup
          isAutoCancelled
+         type
          organization {
             datahubUrl
             stripeAccountId
@@ -81,6 +82,29 @@ const CART = `
       }
    }
 `
+
+const CART_PAYMENT = `
+   query CART_PAYMENT($id: Int!) {
+      cartPayment(id: $id) {
+      id
+      cartId
+      paymentStatus
+      paymentId
+      stripeInvoiceId
+      paymentRetryAttempt
+    }
+   }
+`
+const UPDATE_CART_PAYMENT = `
+mutation UPDATE_CART_PAYMENT($id: Int!, $_inc: order_cartPayment_inc_input, $_set: order_cartPayment_set_input) {
+   updateCartPayment(pk_columns: {id: $id}, _inc: $_inc, _set: $_set) {
+     cartId
+     id
+     paymentStatus
+     paymentRetryAttempt
+   }
+ }
+ `
 
 const STATUS = {
    created: 'CREATED',
@@ -146,8 +170,11 @@ export const paymentIntentEvents = async (req, res) => {
          })
 
       const [customerPaymentIntent] = customerPaymentIntents
-      const { organization = {}, isAutoCancelled = false } =
-         customerPaymentIntent
+      const {
+         organization = {},
+         isAutoCancelled = false,
+         type = 'cart',
+      } = customerPaymentIntent
 
       if (isAutoCancelled) {
          return res.status(200).json({
@@ -161,22 +188,40 @@ export const paymentIntentEvents = async (req, res) => {
          headers: { 'x-hasura-admin-secret': organization.secret },
       })
 
-      const { cart } = await datahub.request(CART, {
-         id: Number(customerPaymentIntent.transferGroup),
-      })
-
-      if (get(cart, 'id') && cart.paymentStatus === 'SUCCEEDED') {
-         return res.status(200).json({
-            success: true,
-            message:
-               "Could not process invoice/intent webhook, since cart's payment has already succeeded",
+      if (type && type === 'cartPayment') {
+         const { cartPayment } = await datahub.request(CART_PAYMENT, {
+            id: Number(customerPaymentIntent.transferGroup),
          })
+
+         if (
+            get(cartPayment, 'id') &&
+            cartPayment.paymentStatus === 'SUCCEEDED'
+         ) {
+            return res.status(200).json({
+               success: true,
+               message:
+                  "Could not process invoice/intent webhook, since cart's payment has already succeeded",
+            })
+         }
+      } else {
+         const { cart } = await datahub.request(CART, {
+            id: Number(customerPaymentIntent.transferGroup),
+         })
+
+         if (get(cart, 'id') && cart.paymentStatus === 'SUCCEEDED') {
+            return res.status(200).json({
+               success: true,
+               message:
+                  "Could not process invoice/intent webhook, since cart's payment has already succeeded",
+            })
+         }
       }
 
       if (node.object === 'invoice') {
          await handleInvoice({
             datahub,
             organization,
+            cartType: type,
             eventType: event.type,
             invoice: event.data.object,
             recordId: customerPaymentIntent.id,
@@ -187,6 +232,7 @@ export const paymentIntentEvents = async (req, res) => {
          await handlePaymentIntent({
             datahub,
             intent: event.data.object,
+            cartType: type,
             recordId: customerPaymentIntent.id,
             cartId: customerPaymentIntent.transferGroup,
          })
@@ -199,8 +245,15 @@ export const paymentIntentEvents = async (req, res) => {
 
 const handleInvoice = async args => {
    try {
-      const { recordId, cartId, invoice, organization, datahub, eventType } =
-         args
+      const {
+         recordId,
+         cartId,
+         invoice,
+         organization,
+         datahub,
+         eventType,
+         cartType = 'cart',
+      } = args
 
       let payment_intent = null
       if (invoice.payment_intent) {
@@ -286,18 +339,33 @@ const handleInvoice = async args => {
          objects: dailycloak_history_objects,
       })
 
-      await datahub.request(UPDATE_CART, {
-         pk_columns: { id: cartId },
-         _set: {
-            stripeInvoiceId: invoice.id,
-            stripeInvoiceDetails: invoice,
-            ...(payment_intent && {
-               transactionRemark: payment_intent,
-               transactionId: payment_intent.id,
-               paymentStatus: STATUS[payment_intent.status],
-            }),
-         },
-      })
+      if (cartType && cartType === 'cartPayment') {
+         await datahub.request(UPDATE_CART_PAYMENT, {
+            id: cartId,
+            _set: {
+               stripeInvoiceId: invoice.id,
+               stripeInvoiceDetails: invoice,
+               ...(payment_intent && {
+                  transactionRemark: payment_intent,
+                  transactionId: payment_intent.id,
+                  paymentStatus: STATUS[payment_intent.status],
+               }),
+            },
+         })
+      } else {
+         await datahub.request(UPDATE_CART, {
+            pk_columns: { id: cartId },
+            _set: {
+               stripeInvoiceId: invoice.id,
+               stripeInvoiceDetails: invoice,
+               ...(payment_intent && {
+                  transactionRemark: payment_intent,
+                  transactionId: payment_intent.id,
+                  paymentStatus: STATUS[payment_intent.status],
+               }),
+            },
+         })
+      }
 
       let datahub_history_objects = [
          {
@@ -331,7 +399,7 @@ const handleInvoice = async args => {
 
 const handlePaymentIntent = async args => {
    try {
-      const { recordId, cartId, intent, datahub } = args
+      const { recordId, cartId, intent, datahub, cartType = 'cart' } = args
       await client.request(UPDATE_CUSTOMER_PAYMENT_INTENT, {
          id: recordId,
          _set: {
@@ -353,14 +421,25 @@ const handlePaymentIntent = async args => {
          ],
       })
 
-      await datahub.request(UPDATE_CART, {
-         pk_columns: { id: cartId },
-         _set: {
-            transactionId: intent.id,
-            transactionRemark: intent,
-            paymentStatus: STATUS[intent.status],
-         },
-      })
+      if (cartType && cartType === 'cartPayment') {
+         await datahub.request(UPDATE_CART_PAYMENT, {
+            id: cartId,
+            _set: {
+               transactionId: intent.id,
+               transactionRemark: intent,
+               paymentStatus: STATUS[intent.status],
+            },
+         })
+      } else {
+         await datahub.request(UPDATE_CART, {
+            pk_columns: { id: cartId },
+            _set: {
+               transactionId: intent.id,
+               transactionRemark: intent,
+               paymentStatus: STATUS[intent.status],
+            },
+         })
+      }
 
       await datahub.request(DATAHUB_INSERT_STRIPE_PAYMENT_HISTORY, {
          objects: [
